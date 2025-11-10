@@ -1,3 +1,6 @@
+// Google Sheets integration for job scraper
+// Copy this entire file to your Railway deployment as sheets.js
+
 const { google } = require('googleapis');
 
 // Initialize Google Sheets API
@@ -33,14 +36,14 @@ function extractSpreadsheetId(input) {
 }
 
 // Get existing jobs from spreadsheet
-async function getExistingJobs() {
+async function getExistingJobs(sheetName = 'company_boards') {
   try {
     const sheets = getGoogleSheetsClient();
     const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'company_boards!A2:H', // Skip header row, read all data columns including status
+      range: `${sheetName}!A2:I`, // Skip header row, read all data columns including type
     });
     
     const rows = response.data.values || [];
@@ -53,7 +56,8 @@ async function getExistingJobs() {
       url: row[4] || '',             // E: Apply_URL
       source: row[5] || '',          // F: Source
       postedAt: row[6] || '',        // G: Posted
-      status: row[7] || ''           // H: Status
+      status: row[7] || '',          // H: Status
+      type: row[8] || ''             // I: Type
     }));
     
   } catch (error) {
@@ -69,7 +73,7 @@ async function getExistingJobs() {
         // Add headers
         await sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: 'company_boards!A1:H1',
+          range: `${sheetName}!A1:I1`,
           valueInputOption: 'RAW',
           resource: {
             values: [[
@@ -80,7 +84,8 @@ async function getExistingJobs() {
               'Apply_URL',
               'Source',
               'Posted',
-              'Status'
+              'Status',
+              'Type'
             ]]
           }
         });
@@ -96,7 +101,7 @@ async function getExistingJobs() {
 }
 
 // Append new jobs to spreadsheet
-async function appendNewJobs(jobs) {
+async function appendNewJobs(jobs, sheetName = 'company_boards') {
   try {
     const sheets = getGoogleSheetsClient();
     const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
@@ -106,7 +111,7 @@ async function appendNewJobs(jobs) {
     try {
       const checkResponse = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: 'company_boards!A1:H1',
+        range: `${sheetName}!A1:I1`,
       });
       needsHeaders = !checkResponse.data.values || checkResponse.data.values.length === 0;
     } catch (error) {
@@ -118,7 +123,7 @@ async function appendNewJobs(jobs) {
       console.log('Adding headers to spreadsheet...');
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'company_boards!A1:H1',
+        range: `${sheetName}!A1:I1`,
         valueInputOption: 'RAW',
         resource: {
           values: [[
@@ -129,7 +134,8 @@ async function appendNewJobs(jobs) {
             'Apply_URL',
             'Source',
             'Posted',
-            'Status'
+            'Status',
+            'Type'
           ]]
         }
       });
@@ -144,13 +150,14 @@ async function appendNewJobs(jobs) {
       job.url,
       job.source,
       job.postedAt,
-      job.status
+      job.status,
+      job.type
     ]);
     
     // Append rows
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'company_boards!A2:H',
+      range: `${sheetName}!A2:I`,
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       resource: {
