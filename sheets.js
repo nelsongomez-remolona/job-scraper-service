@@ -5,7 +5,28 @@ const { google } = require('googleapis');
 
 // Initialize Google Sheets API
 function getGoogleSheetsClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+  let credentials;
+  
+  // Try GOOGLE_CREDENTIALS first (full JSON format)
+  if (process.env.GOOGLE_CREDENTIALS) {
+    try {
+      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    } catch (error) {
+      console.error('Error parsing GOOGLE_CREDENTIALS:', error.message);
+      throw new Error('GOOGLE_CREDENTIALS must be valid JSON');
+    }
+  } 
+  // Fallback to separate email + key format
+  else if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+    credentials = {
+      type: 'service_account',
+      client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: process.env.GOOGLE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n')
+    };
+  } 
+  else {
+    throw new Error('Missing Google credentials. Set either GOOGLE_CREDENTIALS or GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_KEY');
+  }
   
   const auth = new google.auth.GoogleAuth({
     credentials,
