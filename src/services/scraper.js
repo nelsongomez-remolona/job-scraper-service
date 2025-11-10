@@ -31,7 +31,7 @@ async function runJobScraper() {
       try {
         const params = {
           engine: 'google_jobs',
-          q: 'product designer design system remote site:board.greenhouse.io',
+          q: 'product designer design system remote greenhouse',
           api_key: process.env.SERPAPI_KEY,
           date_posted: 'month' // Get jobs from last month, will filter to 14 days in code
         };
@@ -82,11 +82,23 @@ async function runJobScraper() {
     const filteredJobs = allJobs.filter(job => {
       const description = (job.description || '').toLowerCase();
       const title = (job.title || '').toLowerCase();
-      const applyUrl = job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '';
       
-      // Only include jobs from board.greenhouse.io or boards.greenhouse.io
-      const isGreenhouseJob = applyUrl.includes('board.greenhouse.io') || 
-                              applyUrl.includes('boards.greenhouse.io');
+      // Check all possible URL sources for greenhouse.io
+      const applyUrl = job.apply_options?.[0]?.link || '';
+      const shareUrl = job.share_url || '';
+      const relatedLinks = job.related_links?.map(link => link.link).join(' ') || '';
+      const allUrls = `${applyUrl} ${shareUrl} ${relatedLinks}`.toLowerCase();
+      
+      // Debug log to see what URLs we're getting
+      if (pageCount <= 2) { // Only log first 2 pages to avoid spam
+        console.log(`Job: ${job.title} at ${job.company_name}`);
+        console.log(`  Apply URL: ${applyUrl}`);
+        console.log(`  Share URL: ${shareUrl}`);
+        console.log(`  Related Links: ${relatedLinks}`);
+      }
+      
+      // STRICT: Only include jobs where ANY URL contains greenhouse.io
+      const isGreenhouseJob = allUrls.includes('greenhouse.io');
       
       // Check for "no AI" mentions
       const hasNoAIPolicy = description.includes('no ai') || 
@@ -111,6 +123,8 @@ async function runJobScraper() {
       
       return isGreenhouseJob && !hasNoAIPolicy && isRecent;
     });
+    
+    console.log(`Jobs after filtering: ${filteredJobs.length}`);
     
     // Step 4: Compare against existing jobs and find unique ones
     const newJobs = filteredJobs.filter(scrapedJob => {
