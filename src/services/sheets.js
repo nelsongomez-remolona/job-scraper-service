@@ -1,96 +1,172 @@
-import { google } from 'googleapis';
-
-const SPREADSHEET_ID = '1KeCj8PdvLiiURpHN3snwKb62FvPpka6vETc_TTy1jh0';
-const SHEET_NAME = 'Sheet1'; // Update this if your sheet has a different name
-const RANGE = `${SHEET_NAME}!A:K`; // Columns A through K (11 columns)
+const { google } = require('googleapis');
 
 // Initialize Google Sheets API
 function getGoogleSheetsClient() {
-  // Using service account credentials from environment variable
   const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
   
   const auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
   
   return google.sheets({ version: 'v4', auth });
 }
 
-// Get existing jobs from spreadsheet
-export async function getExistingJobs() {
-  const sheets = getGoogleSheetsClient();
+// Extract spreadsheet ID from various URL formats or direct ID
+function extractSpreadsheetId(input) {
+  if (!input) {
+    throw new Error('SPREADSHEET_ID environment variable is not set');
+  }
   
+  // If it's already just an ID (no slashes), return it
+  if (!input.includes('/')) {
+    return input;
+  }
+  
+  // Extract from full URL: https://docs.google.com/spreadsheets/d/{ID}/edit...
+  const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (match) {
+    return match[1];
+  }
+  
+  throw new Error('Invalid SPREADSHEET_ID format');
+}
+
+// Get existing jobs from spreadsheet
+async function getExistingJobs() {
   try {
+    const sheets = getGoogleSheetsClient();
+    const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
+    
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: RANGE,
+      spreadsheetId,
+      range: 'company_boards!A2:H', // Skip header row, read all data columns including status
     });
     
     const rows = response.data.values || [];
-    const existingJobs = new Set();
     
-    // Skip header row (index 0)
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (row.length >= 2) {
-        const title = (row[1] || '').toLowerCase(); // Column B (Title)
-        const company = (row[2] || '').toLowerCase(); // Column C (Company)
-        
-        if (title && company) {
-          const key = `${company}|${title}`;
-          existingJobs.add(key);
-        }
-      }
-    }
+    return rows.map(row => ({
+      timestamp: row[0] || '',      // A: Timestamp
+      title: row[1] || '',           // B: Title
+      company: row[2] || '',         // C: Company
+      location: row[3] || '',        // D: Location
+      url: row[4] || '',             // E: Apply_URL
+      source: row[5] || '',          // F: Source
+      postedAt: row[6] || '',        // G: Posted
+      status: row[7] || ''           // H: Status
+    }));
     
-    return existingJobs;
   } catch (error) {
     console.error('Error fetching existing jobs:', error.message);
+    
+    // If sheet doesn't exist or is empty, try to initialize it with headers
+    if (error.message.includes('Unable to parse range')) {
+      console.log('Sheet appears to be empty, initializing with headers...');
+      try {
+        const sheets = getGoogleSheetsClient();
+        const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
+        
+        // Add headers
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: 'company_boards!A1:H1',
+          valueInputOption: 'RAW',
+          resource: {
+            values: [[
+              'Timestamp',
+              'Title',
+              'Company',
+              'Location',
+              'Apply_URL',
+              'Source',
+              'Posted',
+              'Status'
+            ]]
+          }
+        });
+        console.log('Headers added successfully');
+      } catch (initError) {
+        console.error('Error initializing headers:', initError.message);
+      }
+      return [];
+    }
+    
     throw error;
   }
 }
 
 // Append new jobs to spreadsheet
-export async function appendJobsToSheet(jobs) {
-  if (!jobs || jobs.length === 0) {
-    console.log('No jobs to append');
-    return;
-  }
-  
-  const sheets = getGoogleSheetsClient();
-  
-  // Convert jobs to rows format
-  // Columns: Timestamp, Title, Company, Location, Apply_URL, Source, Posted, Status, Policy Flag, Needs User Review, Notes
-  const rows = jobs.map(job => [
-    job.timestamp,
-    job.title,
-    job.company,
-    job.location,
-    job.apply_url,
-    job.source,
-    job.posted,
-    job.status,
-    job.policy_flag,
-    job.needs_user_review,
-    job.notes
-  ]);
-  
+async function appendNewJobs(jobs) {
   try {
-    const response = await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: RANGE,
+    const sheets = getGoogleSheetsClient();
+    const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
+    
+    // Check if we need to add headers
+    let needsHeaders = false;
+    try {
+      const checkResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'company_boards!A1:H1',
+      });
+      needsHeaders = !checkResponse.data.values || checkResponse.data.values.length === 0;
+    } catch (error) {
+      needsHeaders = true;
+    }
+    
+    // Add headers if needed
+    if (needsHeaders) {
+      console.log('Adding headers to spreadsheet...');
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: 'company_boards!A1:H1',
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[
+            'Timestamp',
+            'Title',
+            'Company',
+            'Location',
+            'Apply_URL',
+            'Source',
+            'Posted',
+            'Status'
+          ]]
+        }
+      });
+    }
+    
+    // Convert jobs to rows
+    const rows = jobs.map(job => [
+      job.timestamp,
+      job.title,
+      job.company,
+      job.location,
+      job.url,
+      job.source,
+      job.postedAt,
+      job.status
+    ]);
+    
+    // Append rows
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: 'company_boards!A2:H',
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: rows,
-      },
+      resource: {
+        values: rows
+      }
     });
     
     console.log(`Appended ${rows.length} rows to spreadsheet`);
-    return response.data;
+    
   } catch (error) {
-    console.error('Error appending to spreadsheet:', error.message);
+    console.error('Error appending jobs to spreadsheet:', error.message);
     throw error;
   }
 }
+
+module.exports = {
+  getExistingJobs,
+  appendNewJobs
+};
