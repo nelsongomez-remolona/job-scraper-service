@@ -40,7 +40,7 @@ async function getExistingJobs() {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'company_boards!A2:G', // Skip header row, read all data columns
+      range: 'company_boards!A2:H', // Skip header row, read all data columns including status
     });
     
     const rows = response.data.values || [];
@@ -52,7 +52,8 @@ async function getExistingJobs() {
       location: row[3] || '',        // D: Location
       url: row[4] || '',             // E: Apply_URL
       source: row[5] || '',          // F: Source
-      postedAt: row[6] || ''         // G: Posted
+      postedAt: row[6] || '',        // G: Posted
+      status: row[7] || ''           // H: Status
     }));
     
   } catch (error) {
@@ -68,7 +69,7 @@ async function getExistingJobs() {
         // Add headers
         await sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: 'company_boards!A1:G1',
+          range: 'company_boards!A1:H1',
           valueInputOption: 'RAW',
           resource: {
             values: [[
@@ -78,7 +79,8 @@ async function getExistingJobs() {
               'Location',
               'Apply_URL',
               'Source',
-              'Posted'
+              'Posted',
+              'Status'
             ]]
           }
         });
@@ -104,7 +106,7 @@ async function appendNewJobs(jobs) {
     try {
       const checkResponse = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: 'company_boards!A1:G1',
+        range: 'company_boards!A1:H1',
       });
       needsHeaders = !checkResponse.data.values || checkResponse.data.values.length === 0;
     } catch (error) {
@@ -116,7 +118,7 @@ async function appendNewJobs(jobs) {
       console.log('Adding headers to spreadsheet...');
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'company_boards!A1:G1',
+        range: 'company_boards!A1:H1',
         valueInputOption: 'RAW',
         resource: {
           values: [[
@@ -126,7 +128,8 @@ async function appendNewJobs(jobs) {
             'Location',
             'Apply_URL',
             'Source',
-            'Posted'
+            'Posted',
+            'Status'
           ]]
         }
       });
@@ -140,13 +143,14 @@ async function appendNewJobs(jobs) {
       job.location,
       job.url,
       job.source,
-      job.postedAt
+      job.postedAt,
+      job.status
     ]);
     
     // Append rows
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'company_boards!A2:G',
+      range: 'company_boards!A2:H',
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       resource: {
