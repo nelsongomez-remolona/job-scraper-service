@@ -1,194 +1,169 @@
-import axios from 'axios';
-import { getExistingJobs, appendJobsToSheet } from './sheets.js';
+const { getJson } = require('serpapi');
+const { getExistingJobs, appendNewJobs } = require('./sheets');
 
-const SERPAPI_KEY = process.env.SERPAPI_KEY;
-const BASE_QUERY = 'product+designer+design+system+remote+(site%3Aboards.greenhouse.io)';
-const DELAY_MS = 3000; // 3 second delay between requests to avoid flagging
-
-// Sleep utility
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Parse "X days ago" to actual date
-function parsePostedDate(postedString) {
-  if (!postedString) return '';
-  
-  const now = new Date();
-  const daysAgoMatch = postedString.match(/(\d+)\s+days?\s+ago/i);
-  const hoursAgoMatch = postedString.match(/(\d+)\s+hours?\s+ago/i);
-  
-  if (daysAgoMatch) {
-    const daysAgo = parseInt(daysAgoMatch[1]);
-    const date = new Date(now);
-    date.setDate(date.getDate() - daysAgo);
-    return date.toISOString().split('T')[0]; // YYYY-MM-DD format
-  }
-  
-  if (hoursAgoMatch) {
-    return now.toISOString().split('T')[0]; // Today
-  }
-  
-  return postedString; // Return as-is if we can't parse
+// Utility function to delay execution
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Extract source from URL (e.g., greenhouse, lever)
-function extractSource(url) {
-  if (!url) return '';
-  
-  if (url.includes('greenhouse.io')) return 'greenhouse';
-  if (url.includes('lever.co')) return 'lever';
-  if (url.includes('ashbyhq.com')) return 'ashby';
-  if (url.includes('workable.com')) return 'workable';
-  
-  return 'other';
-}
-
-// Check if job posting has "no AI" policy
-function checkPolicyFlag(snippet, title) {
-  const text = `${snippet || ''} ${title || ''}`.toLowerCase();
-  const noAiKeywords = ['no ai', 'no artificial intelligence', 'ai prohibited', 'do not use ai'];
-  
-  return noAiKeywords.some(keyword => text.includes(keyword));
-}
-
-// Fetch results from SerpAPI
-async function fetchSerpResults(start = 0) {
-  const url = `https://serpapi.com/search.json?engine=google&q=${BASE_QUERY}&tbs=qdr%3Am&num=50&start=${start}&hl=en&gl=us&device=desktop&api_key=${SERPAPI_KEY}`;
-  
-  console.log(`Fetching results from start=${start}...`);
-  
+async function runJobScraper() {
   try {
-    const response = await axios.get(url, { timeout: 30000 });
-    return response.data;
-  } catch (error) {
-    console.error(`Error fetching from SerpAPI (start=${start}):`, error.message);
-    throw error;
-  }
-}
-
-// Process results and extract job data
-function processResults(serpData) {
-  const jobs = [];
-  
-  if (!serpData.organic_results || serpData.organic_results.length === 0) {
-    console.log('No organic results found');
-    return jobs;
-  }
-  
-  for (const result of serpData.organic_results) {
-    const title = result.title || '';
-    const link = result.link || '';
-    const snippet = result.snippet || '';
+    console.log('Starting job scraper...');
     
-    // Extract company name (usually in the title or domain)
-    let company = '';
-    if (link.includes('greenhouse.io')) {
-      const match = link.match(/boards\.greenhouse\.io\/([^\/]+)/);
-      company = match ? match[1] : '';
-    }
-    
-    // Try to extract from title if company not found
-    if (!company && title) {
-      // Common pattern: "Job Title - Company Name" or "Job Title | Company Name"
-      const titleMatch = title.match(/[-|](.+?)(?:\s*[-|]|$)/);
-      if (titleMatch) {
-        company = titleMatch[1].trim();
-      }
-    }
-    
-    // Extract location (often in snippet)
-    const locationMatch = snippet.match(/(?:Remote|Location:|Based in|Located in)\s*:?\s*([^.•]+)/i);
-    const location = locationMatch ? locationMatch[1].trim() : 'Remote';
-    
-    // Check for policy flags
-    const hasNoAiPolicy = checkPolicyFlag(snippet, title);
-    
-    if (hasNoAiPolicy) {
-      console.log(`Skipping job with "no AI" policy: ${title}`);
-      continue;
-    }
-    
-    const job = {
-      timestamp: new Date().toISOString(),
-      title: title,
-      company: company || 'Unknown',
-      location: location,
-      apply_url: link,
-      source: extractSource(link),
-      posted: parsePostedDate(result.date || ''),
-      status: 'review_required',
-      policy_flag: hasNoAiPolicy ? 'YES' : '',
-      needs_user_review: 'YES',
-      notes: 'Auto-scraped from SerpAPI'
-    };
-    
-    jobs.push(job);
-  }
-  
-  return jobs;
-}
-
-// Main scraper function
-export async function runJobScraper() {
-  console.log('Starting job scraper...');
-  console.log('Timestamp:', new Date().toISOString());
-  
-  try {
-    // Step 1: Fetch existing jobs from Google Sheet
+    // Step 1: Get existing jobs from Google Sheets
     console.log('Fetching existing jobs from Google Sheet...');
     const existingJobs = await getExistingJobs();
-    console.log(`Found ${existingJobs.size} existing jobs in spreadsheet`);
+    console.log(`Found ${existingJobs.length} existing jobs in spreadsheet`);
     
-    // Step 2: Fetch results from SerpAPI (up to 80 results)
+    // Step 2: Scrape jobs from SerpAPI
     const allJobs = [];
+    const TOTAL_RESULTS = 80;
+    const DELAY_MS = 2000; // 2 second delay between requests
     
-    // Fetch first 50 results (start=0)
-    console.log('Fetching first batch (0-50)...');
-    const firstBatch = await fetchSerpResults(0);
-    const firstJobs = processResults(firstBatch);
-    allJobs.push(...firstJobs);
+    let nextPageToken = null;
+    let totalFetched = 0;
+    let pageCount = 0;
     
-    await sleep(DELAY_MS); // Delay to prevent flagging
-    
-    // Fetch next 30 results to reach 80 (start=50)
-    console.log('Fetching second batch (50-80)...');
-    const secondBatch = await fetchSerpResults(50);
-    const secondJobs = processResults(secondBatch);
-    allJobs.push(...secondJobs);
+    while (totalFetched < TOTAL_RESULTS) {
+      pageCount++;
+      console.log(`Fetching page ${pageCount}...`);
+      
+      try {
+        const params = {
+          engine: 'google_jobs',
+          q: 'product designer design system remote site:board.greenhouse.io',
+          api_key: process.env.SERPAPI_KEY,
+          date_posted: 'month' // Get jobs from last month, will filter to 14 days in code
+        };
+        
+        // Add next_page_token if we have one (for pagination)
+        if (nextPageToken) {
+          params.next_page_token = nextPageToken;
+        }
+        
+        const response = await getJson(params);
+        
+        if (response.jobs_results && response.jobs_results.length > 0) {
+          const jobsToAdd = response.jobs_results.slice(0, TOTAL_RESULTS - totalFetched);
+          allJobs.push(...jobsToAdd);
+          totalFetched += jobsToAdd.length;
+          console.log(`Fetched ${jobsToAdd.length} jobs (total: ${totalFetched})`);
+        }
+        
+        // Check if there's a next page
+        if (response.serpapi_pagination && response.serpapi_pagination.next_page_token) {
+          nextPageToken = response.serpapi_pagination.next_page_token;
+          
+          // Add delay before next request if we're continuing
+          if (totalFetched < TOTAL_RESULTS) {
+            console.log(`Waiting ${DELAY_MS}ms before next request...`);
+            await delay(DELAY_MS);
+          }
+        } else {
+          // No more pages available
+          console.log('No more pages available');
+          break;
+        }
+        
+      } catch (error) {
+        console.error(`Error fetching page ${pageCount}:`, error.message);
+        console.error('Full error:', error);
+        // Break on error since we can't continue pagination
+        break;
+      }
+    }
     
     console.log(`Total jobs fetched: ${allJobs.length}`);
     
-    // Step 3: Filter out duplicates
-    const newJobs = [];
-    for (const job of allJobs) {
-      const key = `${job.company.toLowerCase()}|${job.title.toLowerCase()}`;
-      if (!existingJobs.has(key)) {
-        newJobs.push(job);
-      } else {
-        console.log(`Duplicate found: ${job.company} - ${job.title}`);
+    // Step 3: Filter for jobs posted within last 14 days, no AI policy, and Greenhouse only
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+    
+    const filteredJobs = allJobs.filter(job => {
+      const description = (job.description || '').toLowerCase();
+      const title = (job.title || '').toLowerCase();
+      const applyUrl = job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '';
+      
+      // Only include jobs from board.greenhouse.io or boards.greenhouse.io
+      const isGreenhouseJob = applyUrl.includes('board.greenhouse.io') || 
+                              applyUrl.includes('boards.greenhouse.io');
+      
+      // Check for "no AI" mentions
+      const hasNoAIPolicy = description.includes('no ai') || 
+                           description.includes('no artificial intelligence') ||
+                           title.includes('no ai');
+      
+      // Check if job was posted within last 14 days
+      let isRecent = true; // Default to true if we can't parse the date
+      if (job.detected_extensions?.posted_at) {
+        const postedStr = job.detected_extensions.posted_at.toLowerCase();
+        
+        // Parse relative dates like "2 days ago", "1 week ago", etc.
+        if (postedStr.includes('day') || postedStr.includes('hour') || postedStr.includes('minute')) {
+          isRecent = true; // Definitely within 14 days
+        } else if (postedStr.includes('week')) {
+          const weeks = parseInt(postedStr.match(/\d+/)?.[0] || '1');
+          isRecent = weeks <= 2; // 2 weeks or less
+        } else if (postedStr.includes('month')) {
+          isRecent = false; // Over a month is too old
+        }
       }
-    }
+      
+      return isGreenhouseJob && !hasNoAIPolicy && isRecent;
+    });
     
-    console.log(`New unique jobs: ${newJobs.length}`);
+    // Step 4: Compare against existing jobs and find unique ones
+    const newJobs = filteredJobs.filter(scrapedJob => {
+      const companyTitle = `${scrapedJob.company_name}|${scrapedJob.title}`.toLowerCase();
+      const jobUrl = scrapedJob.apply_options?.[0]?.link || scrapedJob.share_url || scrapedJob.related_links?.[0]?.link || '';
+      
+      // Check if this job already exists (by company+title or URL)
+      const isDuplicate = existingJobs.some(existingJob => {
+        const existingCompanyTitle = `${existingJob.company}|${existingJob.title}`.toLowerCase();
+        const existingUrl = existingJob.url;
+        
+        return (companyTitle === existingCompanyTitle) || 
+               (jobUrl && existingUrl && jobUrl === existingUrl);
+      });
+      
+      return !isDuplicate;
+    });
     
-    // Step 4: Append new jobs to spreadsheet
-    if (newJobs.length > 0) {
-      console.log('Appending new jobs to spreadsheet...');
-      await appendJobsToSheet(newJobs);
-      console.log('Successfully added new jobs to spreadsheet');
+    console.log(`New unique jobs found: ${newJobs.length}`);
+    
+    // Step 5: Format jobs with timestamp and prepare for insertion
+    const formattedJobs = newJobs.map(job => ({
+      timestamp: new Date().toISOString(),
+      title: job.title,
+      company: job.company_name,
+      location: job.location,
+      url: job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '',
+      source: job.via || 'Unknown',
+      postedAt: job.detected_extensions?.posted_at || '',
+      status: 'review_required'
+    }));
+    
+    // Step 6: Append new jobs to Google Sheets
+    if (formattedJobs.length > 0) {
+      console.log(`Adding ${formattedJobs.length} new jobs to spreadsheet...`);
+      await appendNewJobs(formattedJobs);
+      console.log('Jobs added successfully!');
     } else {
       console.log('No new jobs to add');
     }
     
+    console.log('Job scraper completed successfully');
+    
     return {
       success: true,
-      total_fetched: allJobs.length,
-      new_jobs: newJobs.length,
-      duplicates: allJobs.length - newJobs.length,
-      timestamp: new Date().toISOString()
+      totalScraped: allJobs.length,
+      newJobsAdded: formattedJobs.length
     };
     
   } catch (error) {
-    console.error('Error in runJobScraper:', error);
+    console.error('Error running job scraper:', error);
     throw error;
   }
 }
+
+module.exports = { runJobScraper };
