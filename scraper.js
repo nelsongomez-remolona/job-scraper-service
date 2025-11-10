@@ -114,7 +114,8 @@ async function runJobScraper() {
       location: job.location,
       url: job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '',
       source: job.via || 'Unknown',
-      postedAt: job.detected_extensions?.posted_at || ''
+      postedAt: job.detected_extensions?.posted_at || '',
+      status: 'review_required'
     }));
     
     // Step 6: Append new jobs to Google Sheets
