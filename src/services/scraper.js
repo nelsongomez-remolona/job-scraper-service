@@ -1,3 +1,6 @@
+// Job scraper with both filtered and general search capabilities
+// Copy this entire file to your Railway deployment as scraper.js
+
 const { getJson } = require('serpapi');
 const { getExistingJobs, appendNewJobs } = require('./sheets');
 
@@ -6,172 +9,351 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function runJobScraper() {
-  try {
-    console.log('Starting job scraper...');
+// Perform a single search with SerpAPI (filtered by job boards)
+async function performSearch(query, type, maxResults = 200) {
+  const allJobs = [];
+  const RESULTS_PER_PAGE = 50; // Max results per page
+  const DELAY_MS = 2000; // 2 second delay between requests
+  
+  let startIndex = 0;
+  let totalFetched = 0;
+  let pageCount = 0;
+  
+  console.log(`\n=== Starting search: "${query}" (type: ${type}) ===`);
+  
+  while (totalFetched < maxResults) {
+    pageCount++;
+    console.log(`Fetching page ${pageCount} (starting at ${startIndex})...`);
     
-    // Step 1: Get existing jobs from Google Sheets
-    console.log('Fetching existing jobs from Google Sheet...');
-    const existingJobs = await getExistingJobs();
-    console.log(`Found ${existingJobs.length} existing jobs in spreadsheet`);
-    
-    // Step 2: Scrape jobs from SerpAPI
-    const allJobs = [];
-    const TOTAL_RESULTS = 80;
-    const DELAY_MS = 2000; // 2 second delay between requests
-    
-    let nextPageToken = null;
-    let totalFetched = 0;
-    let pageCount = 0;
-    
-    while (totalFetched < TOTAL_RESULTS) {
-      pageCount++;
-      console.log(`Fetching page ${pageCount}...`);
+    try {
+      const params = {
+        engine: 'google',
+        q: query + ' (site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com OR site:linkedin.com/jobs)',
+        api_key: process.env.SERPAPI_KEY,
+        tbs: 'qdr:m', // Last month
+        num: Math.min(RESULTS_PER_PAGE, maxResults - totalFetched),
+        start: startIndex,
+        hl: 'en',
+        gl: 'us',
+        device: 'desktop'
+      };
       
-      try {
-        const params = {
-          engine: 'google_jobs',
-          q: 'product designer design system remote greenhouse',
-          api_key: process.env.SERPAPI_KEY,
-          date_posted: 'month' // Get jobs from last month, will filter to 14 days in code
-        };
+      const response = await getJson(params);
+      
+      if (response.organic_results && response.organic_results.length > 0) {
+        // Add type to each job
+        const jobsWithType = response.organic_results.map(job => ({
+          ...job,
+          searchType: type
+        }));
         
-        // Add next_page_token if we have one (for pagination)
-        if (nextPageToken) {
-          params.next_page_token = nextPageToken;
-        }
+        allJobs.push(...jobsWithType);
+        totalFetched += response.organic_results.length;
+        console.log(`Fetched ${response.organic_results.length} results (total: ${totalFetched})`);
         
-        const response = await getJson(params);
-        
-        if (response.jobs_results && response.jobs_results.length > 0) {
-          const jobsToAdd = response.jobs_results.slice(0, TOTAL_RESULTS - totalFetched);
-          allJobs.push(...jobsToAdd);
-          totalFetched += jobsToAdd.length;
-          console.log(`Fetched ${jobsToAdd.length} jobs (total: ${totalFetched})`);
-        }
-        
-        // Check if there's a next page
-        if (response.serpapi_pagination && response.serpapi_pagination.next_page_token) {
-          nextPageToken = response.serpapi_pagination.next_page_token;
-          
-          // Add delay before next request if we're continuing
-          if (totalFetched < TOTAL_RESULTS) {
-            console.log(`Waiting ${DELAY_MS}ms before next request...`);
-            await delay(DELAY_MS);
-          }
-        } else {
-          // No more pages available
-          console.log('No more pages available');
+        // Check if there are more results
+        if (response.organic_results.length < RESULTS_PER_PAGE || totalFetched >= maxResults) {
+          console.log('No more results available or limit reached');
           break;
         }
         
-      } catch (error) {
-        console.error(`Error fetching page ${pageCount}:`, error.message);
-        console.error('Full error:', error);
-        // Break on error since we can't continue pagination
+        // Update start index for next page
+        startIndex += response.organic_results.length;
+        
+        // Add delay before next request
+        console.log(`Waiting ${DELAY_MS}ms before next request...`);
+        await delay(DELAY_MS);
+        
+      } else {
+        console.log('No organic results found');
         break;
+      }
+      
+    } catch (error) {
+      console.error(`Error fetching page ${pageCount}:`, error.message);
+      console.error('Full error:', error);
+      break;
+    }
+  }
+  
+  console.log(`Search complete: ${allJobs.length} results for "${query}"`);
+  return allJobs;
+}
+
+// Perform a single search with SerpAPI (NO job board filtering - wider pool)
+async function performGeneralSearch(query, type, maxResults = 200) {
+  const allJobs = [];
+  const RESULTS_PER_PAGE = 50; // Max results per page
+  const DELAY_MS = 2000; // 2 second delay between requests
+  
+  let startIndex = 0;
+  let totalFetched = 0;
+  let pageCount = 0;
+  
+  console.log(`\n=== Starting GENERAL search: "${query}" (type: ${type} general) ===`);
+  
+  while (totalFetched < maxResults) {
+    pageCount++;
+    console.log(`Fetching page ${pageCount} (starting at ${startIndex})...`);
+    
+    try {
+      const params = {
+        engine: 'google',
+        q: query, // NO site: restrictions - open search
+        api_key: process.env.SERPAPI_KEY,
+        tbs: 'qdr:m', // Last month
+        num: Math.min(RESULTS_PER_PAGE, maxResults - totalFetched),
+        start: startIndex,
+        hl: 'en',
+        gl: 'us',
+        device: 'desktop'
+      };
+      
+      const response = await getJson(params);
+      
+      if (response.organic_results && response.organic_results.length > 0) {
+        // Add type to each job (with "general" suffix)
+        const jobsWithType = response.organic_results.map(job => ({
+          ...job,
+          searchType: type + ' general'
+        }));
+        
+        allJobs.push(...jobsWithType);
+        totalFetched += response.organic_results.length;
+        console.log(`Fetched ${response.organic_results.length} results (total: ${totalFetched})`);
+        
+        // Check if there are more results
+        if (response.organic_results.length < RESULTS_PER_PAGE || totalFetched >= maxResults) {
+          console.log('No more results available or limit reached');
+          break;
+        }
+        
+        // Update start index for next page
+        startIndex += response.organic_results.length;
+        
+        // Add delay before next request
+        console.log(`Waiting ${DELAY_MS}ms before next request...`);
+        await delay(DELAY_MS);
+        
+      } else {
+        console.log('No organic results found');
+        break;
+      }
+      
+    } catch (error) {
+      console.error(`Error fetching page ${pageCount}:`, error.message);
+      console.error('Full error:', error);
+      break;
+    }
+  }
+  
+  console.log(`General search complete: ${allJobs.length} results for "${query}"`);
+  return allJobs;
+}
+
+async function runJobScraper() {
+  try {
+    console.log('Starting comprehensive job scraper...');
+    
+    // Step 1: Get existing jobs from Google Sheets
+    console.log('\n=== Step 1: Fetching existing jobs from Google Sheet ===');
+    const existingJobs = await getExistingJobs('company_boards');
+    console.log(`Found ${existingJobs.length} existing jobs in spreadsheet`);
+    
+    // Create sets for deduplication
+    const existingUrls = new Set(existingJobs.map(job => job.url).filter(Boolean));
+    const existingCompanyTitles = new Set(
+      existingJobs.map(job => `${job.company}|${job.title}`.toLowerCase()).filter(ct => ct !== '|')
+    );
+    
+    console.log(`Tracking ${existingUrls.size} unique URLs and ${existingCompanyTitles.size} unique company+title combos`);
+    
+    // Step 2: Perform all 4 searches
+    console.log('\n=== Step 2: Performing searches ===');
+    
+    const searches = [
+      { query: 'product designer design system remote', type: 'design system remote' },
+      { query: 'product designer remote', type: 'standard remote' },
+      { query: 'product designer san francisco', type: 'standard' },
+      { query: 'product designer design system san francisco', type: 'product designer design system' }
+    ];
+    
+    let allScrapedJobs = [];
+    
+    for (const search of searches) {
+      const jobs = await performSearch(search.query, search.type, 200);
+      allScrapedJobs.push(...jobs);
+      
+      // Add delay between different searches
+      if (searches.indexOf(search) < searches.length - 1) {
+        console.log('\nWaiting 3 seconds before next search...');
+        await delay(3000);
       }
     }
     
-    console.log(`Total jobs fetched: ${allJobs.length}`);
+    console.log(`\n=== Total results across all searches: ${allScrapedJobs.length} ===`);
     
-    // Step 3: Filter for jobs posted within last 14 days, no AI policy, and Greenhouse only
-    const fourteenDaysAgo = new Date();
-    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+    // Step 3: Filter jobs
+    console.log('\n=== Step 3: Filtering jobs ===');
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
     
-    const filteredJobs = allJobs.filter(job => {
-      const description = (job.description || '').toLowerCase();
+    const filteredJobs = allScrapedJobs.filter(job => {
+      const snippet = (job.snippet || '').toLowerCase();
       const title = (job.title || '').toLowerCase();
+      const link = (job.link || '').toLowerCase();
       
-      // Check all possible URL sources for greenhouse.io
-      const applyUrl = job.apply_options?.[0]?.link || '';
-      const shareUrl = job.share_url || '';
-      const relatedLinks = job.related_links?.map(link => link.link).join(' ') || '';
-      const allUrls = `${applyUrl} ${shareUrl} ${relatedLinks}`.toLowerCase();
+      // Check if URL is from one of our supported job boards
+      const isGreenhouse = link.includes('greenhouse.io');
+      const isLever = link.includes('lever.co');
+      const isAshby = link.includes('ashbyhq.com');
+      const isLinkedIn = link.includes('linkedin.com/jobs');
       
-      // Debug log to see what URLs we're getting
-      if (pageCount <= 2) { // Only log first 2 pages to avoid spam
-        console.log(`Job: ${job.title} at ${job.company_name}`);
-        console.log(`  Apply URL: ${applyUrl}`);
-        console.log(`  Share URL: ${shareUrl}`);
-        console.log(`  Related Links: ${relatedLinks}`);
-      }
-      
-      // STRICT: Only include jobs where ANY URL contains greenhouse.io
-      const isGreenhouseJob = allUrls.includes('greenhouse.io');
+      const isValidJobBoard = isGreenhouse || isLever || isAshby || isLinkedIn;
       
       // Check for "no AI" mentions
-      const hasNoAIPolicy = description.includes('no ai') || 
-                           description.includes('no artificial intelligence') ||
+      const hasNoAIPolicy = snippet.includes('no ai') || 
+                           snippet.includes('no artificial intelligence') ||
                            title.includes('no ai');
       
-      // Check if job was posted within last 14 days
-      let isRecent = true; // Default to true if we can't parse the date
-      if (job.detected_extensions?.posted_at) {
-        const postedStr = job.detected_extensions.posted_at.toLowerCase();
-        
-        // Parse relative dates like "2 days ago", "1 week ago", etc.
-        if (postedStr.includes('day') || postedStr.includes('hour') || postedStr.includes('minute')) {
-          isRecent = true; // Definitely within 14 days
-        } else if (postedStr.includes('week')) {
-          const weeks = parseInt(postedStr.match(/\d+/)?.[0] || '1');
-          isRecent = weeks <= 2; // 2 weeks or less
-        } else if (postedStr.includes('month')) {
-          isRecent = false; // Over a month is too old
+      // For date filtering, we rely on the tbs=qdr:m parameter (within last month)
+      let isRecent = true;
+      
+      // Try to extract date from snippet if available
+      if (job.date) {
+        const jobDate = new Date(job.date);
+        if (!isNaN(jobDate.getTime())) {
+          isRecent = jobDate >= oneMonthAgo;
         }
       }
       
-      return isGreenhouseJob && !hasNoAIPolicy && isRecent;
+      return isValidJobBoard && !hasNoAIPolicy && isRecent;
     });
     
     console.log(`Jobs after filtering: ${filteredJobs.length}`);
     
-    // Step 4: Compare against existing jobs and find unique ones
-    const newJobs = filteredJobs.filter(scrapedJob => {
-      const companyTitle = `${scrapedJob.company_name}|${scrapedJob.title}`.toLowerCase();
-      const jobUrl = scrapedJob.apply_options?.[0]?.link || scrapedJob.share_url || scrapedJob.related_links?.[0]?.link || '';
-      
-      // Check if this job already exists (by company+title or URL)
-      const isDuplicate = existingJobs.some(existingJob => {
-        const existingCompanyTitle = `${existingJob.company}|${existingJob.title}`.toLowerCase();
-        const existingUrl = existingJob.url;
-        
-        return (companyTitle === existingCompanyTitle) || 
-               (jobUrl && existingUrl && jobUrl === existingUrl);
-      });
-      
-      return !isDuplicate;
-    });
+    // Step 4: Deduplicate across all searches
+    console.log('\n=== Step 4: Deduplicating jobs ===');
     
-    console.log(`New unique jobs found: ${newJobs.length}`);
+    const seenUrls = new Set(existingUrls);
+    const seenCompanyTitles = new Set(existingCompanyTitles);
+    const uniqueJobs = [];
+    
+    for (const job of filteredJobs) {
+      const link = job.link || '';
+      const url = link;
+      
+      // Extract company from URL based on job board type
+      let company = 'Unknown';
+      let source = 'Unknown';
+      
+      // Greenhouse: boards.greenhouse.io/company/jobs/...
+      const greenhouseMatch = link.match(/boards\.greenhouse\.io\/([^\/]+)/);
+      if (greenhouseMatch) {
+        company = greenhouseMatch[1];
+        source = 'Greenhouse';
+      }
+      
+      // Lever: jobs.lever.co/company/...
+      const leverMatch = link.match(/jobs\.lever\.co\/([^\/]+)/);
+      if (leverMatch) {
+        company = leverMatch[1];
+        source = 'Lever';
+      }
+      
+      // Ashby: jobs.ashbyhq.com/company/...
+      const ashbyMatch = link.match(/jobs\.ashbyhq\.com\/([^\/]+)/);
+      if (ashbyMatch) {
+        company = ashbyMatch[1];
+        source = 'Ashby';
+      }
+      
+      // LinkedIn: linkedin.com/jobs/view/...
+      const linkedInMatch = link.match(/linkedin\.com\/jobs\/view/);
+      if (linkedInMatch) {
+        // Try to extract company name from title or snippet
+        const titleMatch = job.title.match(/at (.+?)(?:\s*\||$)/i);
+        if (titleMatch) {
+          company = titleMatch[1].trim();
+        }
+        source = 'LinkedIn';
+      }
+      
+      const companyTitle = `${company}|${job.title}`.toLowerCase();
+      
+      // Check if we've already seen this URL or company+title combo
+      const urlExists = seenUrls.has(url);
+      const companyTitleExists = seenCompanyTitles.has(companyTitle);
+      
+      if (!urlExists && !companyTitleExists) {
+        // This is a unique job
+        uniqueJobs.push({ ...job, extractedCompany: company, extractedSource: source });
+        seenUrls.add(url);
+        seenCompanyTitles.add(companyTitle);
+      }
+    }
+    
+    console.log(`New unique jobs found: ${uniqueJobs.length}`);
     
     // Step 5: Format jobs with timestamp and prepare for insertion
-    const formattedJobs = newJobs.map(job => ({
-      timestamp: new Date().toISOString(),
-      title: job.title,
-      company: job.company_name,
-      location: job.location,
-      url: job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '',
-      source: job.via || 'Unknown',
-      postedAt: job.detected_extensions?.posted_at || '',
-      status: 'review_required'
-    }));
+    console.log('\n=== Step 5: Formatting jobs for insertion ===');
+    
+    const formattedJobs = uniqueJobs.map(job => {
+      // Use the extracted company and source from deduplication step
+      const company = job.extractedCompany || 'Unknown';
+      const source = job.extractedSource || 'Unknown';
+      
+      // Determine location based on type
+      let location = 'Remote';
+      if (job.searchType.includes('san francisco')) {
+        location = 'San Francisco';
+      } else if (job.searchType === 'standard') {
+        location = 'San Francisco';
+      }
+      
+      return {
+        timestamp: new Date().toISOString(),
+        title: job.title,
+        company: company,
+        location: location,
+        url: job.link,
+        source: source,
+        postedAt: job.date || '',
+        status: 'review_required',
+        type: job.searchType
+      };
+    });
+    
+    // Log breakdown by type
+    const typeBreakdown = {};
+    formattedJobs.forEach(job => {
+      typeBreakdown[job.type] = (typeBreakdown[job.type] || 0) + 1;
+    });
+    
+    console.log('\nBreakdown by type:');
+    Object.entries(typeBreakdown).forEach(([type, count]) => {
+      console.log(`  ${type}: ${count} jobs`);
+    });
     
     // Step 6: Append new jobs to Google Sheets
+    console.log('\n=== Step 6: Saving to spreadsheet ===');
+    
     if (formattedJobs.length > 0) {
-      console.log(`Adding ${formattedJobs.length} new jobs to spreadsheet...`);
-      await appendNewJobs(formattedJobs);
+      console.log(`Adding ${formattedJobs.length} new jobs to company_boards...`);
+      await appendNewJobs(formattedJobs, 'company_boards');
       console.log('Jobs added successfully!');
     } else {
       console.log('No new jobs to add');
     }
     
-    console.log('Job scraper completed successfully');
+    console.log('\n=== Job scraper completed successfully ===');
     
     return {
       success: true,
-      totalScraped: allJobs.length,
-      newJobsAdded: formattedJobs.length
+      totalScraped: allScrapedJobs.length,
+      totalFiltered: filteredJobs.length,
+      newJobsAdded: formattedJobs.length,
+      breakdown: typeBreakdown
     };
     
   } catch (error) {
@@ -180,4 +362,223 @@ async function runJobScraper() {
   }
 }
 
-module.exports = { runJobScraper };
+// NEW FUNCTION: General scraper without job board restrictions
+async function runGeneralJobScraper() {
+  try {
+    console.log('Starting GENERAL job scraper (no job board restrictions)...');
+    
+    // Step 1: Get existing jobs from Google Sheets
+    console.log('\n=== Step 1: Fetching existing jobs from Google Sheet ===');
+    const existingJobs = await getExistingJobs('company_boards');
+    console.log(`Found ${existingJobs.length} existing jobs in spreadsheet`);
+    
+    // Create sets for deduplication
+    const existingUrls = new Set(existingJobs.map(job => job.url).filter(Boolean));
+    const existingCompanyTitles = new Set(
+      existingJobs.map(job => `${job.company}|${job.title}`.toLowerCase()).filter(ct => ct !== '|')
+    );
+    
+    console.log(`Tracking ${existingUrls.size} unique URLs and ${existingCompanyTitles.size} unique company+title combos`);
+    
+    // Step 2: Perform all 4 searches (GENERAL - no job board filtering)
+    console.log('\n=== Step 2: Performing GENERAL searches (no job board restrictions) ===');
+    
+    const searches = [
+      { query: 'product designer design system remote', type: 'design system remote' },
+      { query: 'product designer remote', type: 'standard remote' },
+      { query: 'product designer san francisco', type: 'standard' },
+      { query: 'product designer design system san francisco', type: 'product designer design system' }
+    ];
+    
+    let allScrapedJobs = [];
+    
+    for (const search of searches) {
+      const jobs = await performGeneralSearch(search.query, search.type, 200);
+      allScrapedJobs.push(...jobs);
+      
+      // Add delay between different searches
+      if (searches.indexOf(search) < searches.length - 1) {
+        console.log('\nWaiting 3 seconds before next search...');
+        await delay(3000);
+      }
+    }
+    
+    console.log(`\n=== Total results across all GENERAL searches: ${allScrapedJobs.length} ===`);
+    
+    // Step 3: Filter jobs (only "no AI" and date filtering - NO job board filtering)
+    console.log('\n=== Step 3: Filtering jobs (no AI policy and date only) ===');
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    
+    const filteredJobs = allScrapedJobs.filter(job => {
+      const snippet = (job.snippet || '').toLowerCase();
+      const title = (job.title || '').toLowerCase();
+      
+      // Check for "no AI" mentions
+      const hasNoAIPolicy = snippet.includes('no ai') || 
+                           snippet.includes('no artificial intelligence') ||
+                           title.includes('no ai');
+      
+      // For date filtering, we rely on the tbs=qdr:m parameter (within last month)
+      let isRecent = true;
+      
+      // Try to extract date from snippet if available
+      if (job.date) {
+        const jobDate = new Date(job.date);
+        if (!isNaN(jobDate.getTime())) {
+          isRecent = jobDate >= oneMonthAgo;
+        }
+      }
+      
+      return !hasNoAIPolicy && isRecent;
+    });
+    
+    console.log(`Jobs after filtering: ${filteredJobs.length}`);
+    
+    // Step 4: Deduplicate across all searches
+    console.log('\n=== Step 4: Deduplicating jobs ===');
+    
+    const seenUrls = new Set(existingUrls);
+    const seenCompanyTitles = new Set(existingCompanyTitles);
+    const uniqueJobs = [];
+    
+    for (const job of filteredJobs) {
+      const link = job.link || '';
+      const url = link;
+      
+      // Extract company from URL or title
+      let company = 'Unknown';
+      let source = 'General';
+      
+      // Try common job board patterns
+      const greenhouseMatch = link.match(/boards\.greenhouse\.io\/([^\/]+)/);
+      const leverMatch = link.match(/jobs\.lever\.co\/([^\/]+)/);
+      const ashbyMatch = link.match(/jobs\.ashbyhq\.com\/([^\/]+)/);
+      const linkedInMatch = link.match(/linkedin\.com\/jobs\/view/);
+      const workableMatch = link.match(/apply\.workable\.com\/([^\/]+)/);
+      const bambooMatch = link.match(/\.bamboohr\.com\/jobs/);
+      
+      if (greenhouseMatch) {
+        company = greenhouseMatch[1];
+        source = 'Greenhouse';
+      } else if (leverMatch) {
+        company = leverMatch[1];
+        source = 'Lever';
+      } else if (ashbyMatch) {
+        company = ashbyMatch[1];
+        source = 'Ashby';
+      } else if (linkedInMatch) {
+        const titleMatch = job.title.match(/at (.+?)(?:\s*\||$)/i);
+        if (titleMatch) {
+          company = titleMatch[1].trim();
+        }
+        source = 'LinkedIn';
+      } else if (workableMatch) {
+        company = workableMatch[1];
+        source = 'Workable';
+      } else if (bambooMatch) {
+        // Try to extract from domain
+        const domainMatch = link.match(/\/\/([^.]+)\./);
+        if (domainMatch) {
+          company = domainMatch[1];
+        }
+        source = 'BambooHR';
+      } else {
+        // Try to extract company from domain as fallback
+        try {
+          const urlObj = new URL(link);
+          const hostname = urlObj.hostname.replace('www.', '');
+          const parts = hostname.split('.');
+          if (parts.length > 0) {
+            company = parts[0];
+          }
+        } catch (e) {
+          company = 'Unknown';
+        }
+      }
+      
+      const companyTitle = `${company}|${job.title}`.toLowerCase();
+      
+      // Check if we've already seen this URL or company+title combo
+      const urlExists = seenUrls.has(url);
+      const companyTitleExists = seenCompanyTitles.has(companyTitle);
+      
+      if (!urlExists && !companyTitleExists) {
+        // This is a unique job
+        uniqueJobs.push({ ...job, extractedCompany: company, extractedSource: source });
+        seenUrls.add(url);
+        seenCompanyTitles.add(companyTitle);
+      }
+    }
+    
+    console.log(`New unique jobs found: ${uniqueJobs.length}`);
+    
+    // Step 5: Format jobs with timestamp and prepare for insertion
+    console.log('\n=== Step 5: Formatting jobs for insertion ===');
+    
+    const formattedJobs = uniqueJobs.map(job => {
+      // Use the extracted company and source from deduplication step
+      const company = job.extractedCompany || 'Unknown';
+      const source = job.extractedSource || 'General';
+      
+      // Determine location based on type (remove "general" suffix for comparison)
+      const baseType = job.searchType.replace(' general', '');
+      let location = 'Remote';
+      if (baseType.includes('san francisco')) {
+        location = 'San Francisco';
+      } else if (baseType === 'standard') {
+        location = 'San Francisco';
+      }
+      
+      return {
+        timestamp: new Date().toISOString(),
+        title: job.title,
+        company: company,
+        location: location,
+        url: job.link,
+        source: source,
+        postedAt: job.date || '',
+        status: 'review_required',
+        type: job.searchType // Already has "general" suffix
+      };
+    });
+    
+    // Log breakdown by type
+    const typeBreakdown = {};
+    formattedJobs.forEach(job => {
+      typeBreakdown[job.type] = (typeBreakdown[job.type] || 0) + 1;
+    });
+    
+    console.log('\nBreakdown by type:');
+    Object.entries(typeBreakdown).forEach(([type, count]) => {
+      console.log(`  ${type}: ${count} jobs`);
+    });
+    
+    // Step 6: Append new jobs to Google Sheets
+    console.log('\n=== Step 6: Saving to spreadsheet ===');
+    
+    if (formattedJobs.length > 0) {
+      console.log(`Adding ${formattedJobs.length} new jobs to company_boards...`);
+      await appendNewJobs(formattedJobs, 'company_boards');
+      console.log('Jobs added successfully!');
+    } else {
+      console.log('No new jobs to add');
+    }
+    
+    console.log('\n=== GENERAL job scraper completed successfully ===');
+    
+    return {
+      success: true,
+      totalScraped: allScrapedJobs.length,
+      totalFiltered: filteredJobs.length,
+      newJobsAdded: formattedJobs.length,
+      breakdown: typeBreakdown
+    };
+    
+  } catch (error) {
+    console.error('Error running GENERAL job scraper:', error);
+    throw error;
+  }
+}
+
+module.exports = { runJobScraper, runGeneralJobScraper };
