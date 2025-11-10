@@ -1,38 +1,19 @@
 const { getJson } = require('serpapi');
 const { getExistingJobs, appendNewJobs } = require('./sheets');
 
-// Delay helper function
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Filter out "no AI" jobs
-function containsNoAI(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  const noAIPatterns = [
-    'no ai',
-    'no a.i',
-    'no-ai',
-    'no artificial intelligence',
-    'without ai',
-    'ai-free'
-  ];
-  return noAIPatterns.some(pattern => text.includes(pattern));
+// Utility function to delay execution
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Main scraper function
 async function runJobScraper() {
-  console.log('Starting job scraper...');
-  
   try {
-    // Step 1: Get existing jobs from spreadsheet
+    console.log('Starting job scraper...');
+    
+    // Step 1: Get existing jobs from Google Sheets
     console.log('Fetching existing jobs from Google Sheet...');
     const existingJobs = await getExistingJobs();
     console.log(`Found ${existingJobs.length} existing jobs in spreadsheet`);
-    
-    // Create lookup sets for duplicate detection
-    const existingUrls = new Set(existingJobs.map(job => job.url));
-    const existingCompanyTitles = new Set(
-      existingJobs.map(job => `${job.company}||${job.title}`.toLowerCase())
-    );
     
     // Step 2: Scrape jobs from SerpAPI
     const allJobs = [];
@@ -93,76 +74,68 @@ async function runJobScraper() {
     
     console.log(`Total jobs fetched: ${allJobs.length}`);
     
-    // Step 3: Filter and deduplicate
-    const newJobs = [];
+    // Step 3: Filter out jobs with "no AI" policy and duplicates
+    const filteredJobs = allJobs.filter(job => {
+      const description = (job.description || '').toLowerCase();
+      const title = (job.title || '').toLowerCase();
+      
+      // Check for "no AI" mentions
+      const hasNoAIPolicy = description.includes('no ai') || 
+                           description.includes('no artificial intelligence') ||
+                           title.includes('no ai');
+      
+      return !hasNoAIPolicy;
+    });
     
-    for (const job of allJobs) {
-      const title = job.title || '';
-      const company = job.company_name || '';
-      const description = job.description || '';
-      const url = job.share_url || job.apply_link || '';
-      const location = job.location || '';
-      const detectedExtensions = job.detected_extensions || {};
-      const postedAt = detectedExtensions.posted_at || '';
-      const scheduleType = detectedExtensions.schedule_type || '';
+    // Step 4: Compare against existing jobs and find unique ones
+    const newJobs = filteredJobs.filter(scrapedJob => {
+      const companyTitle = `${scrapedJob.company_name}|${scrapedJob.title}`.toLowerCase();
+      const jobUrl = scrapedJob.share_url || scrapedJob.related_links?.[0]?.link || '';
       
-      // Skip if no URL
-      if (!url) {
-        continue;
-      }
-      
-      // Skip if contains "no AI"
-      if (containsNoAI(title, description)) {
-        console.log(`Filtered out (no AI): ${title} at ${company}`);
-        continue;
-      }
-      
-      // Skip if duplicate URL
-      if (existingUrls.has(url)) {
-        continue;
-      }
-      
-      // Skip if duplicate company+title combination
-      const companyTitleKey = `${company}||${title}`.toLowerCase();
-      if (existingCompanyTitles.has(companyTitleKey)) {
-        continue;
-      }
-      
-      // Add to new jobs
-      newJobs.push({
-        title,
-        company,
-        location,
-        url,
-        postedAt,
-        scheduleType,
-        scrapedAt: new Date().toISOString()
+      // Check if this job already exists (by company+title or URL)
+      const isDuplicate = existingJobs.some(existingJob => {
+        const existingCompanyTitle = `${existingJob.company}|${existingJob.title}`.toLowerCase();
+        const existingUrl = existingJob.url;
+        
+        return (companyTitle === existingCompanyTitle) || 
+               (jobUrl && existingUrl && jobUrl === existingUrl);
       });
       
-      // Update lookup sets
-      existingUrls.add(url);
-      existingCompanyTitles.add(companyTitleKey);
-    }
+      return !isDuplicate;
+    });
     
     console.log(`New unique jobs found: ${newJobs.length}`);
     
-    // Step 4: Append new jobs to spreadsheet
-    if (newJobs.length > 0) {
-      console.log('Appending new jobs to spreadsheet...');
-      await appendNewJobs(newJobs);
-      console.log('Successfully added new jobs to spreadsheet');
+    // Step 5: Format jobs with timestamp and prepare for insertion
+    const formattedJobs = newJobs.map(job => ({
+      timestamp: new Date().toISOString(),
+      title: job.title,
+      company: job.company_name,
+      location: job.location,
+      url: job.share_url || job.related_links?.[0]?.link || '',
+      source: 'Google Jobs (SerpAPI)',
+      postedAt: job.detected_extensions?.posted_at || ''
+    }));
+    
+    // Step 6: Append new jobs to Google Sheets
+    if (formattedJobs.length > 0) {
+      console.log(`Adding ${formattedJobs.length} new jobs to spreadsheet...`);
+      await appendNewJobs(formattedJobs);
+      console.log('Jobs added successfully!');
     } else {
       console.log('No new jobs to add');
     }
     
     console.log('Job scraper completed successfully');
+    
     return {
-      totalFetched: allJobs.length,
-      newJobsAdded: newJobs.length
+      success: true,
+      totalScraped: allJobs.length,
+      newJobsAdded: formattedJobs.length
     };
     
   } catch (error) {
-    console.error('Error in job scraper:', error);
+    console.error('Error running job scraper:', error);
     throw error;
   }
 }
