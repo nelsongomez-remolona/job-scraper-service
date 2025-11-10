@@ -36,36 +36,58 @@ async function runJobScraper() {
     
     // Step 2: Scrape jobs from SerpAPI
     const allJobs = [];
-    const RESULTS_PER_PAGE = 50; // SerpAPI max per request
     const TOTAL_RESULTS = 80;
     const DELAY_MS = 2000; // 2 second delay between requests
     
-    for (let start = 0; start < TOTAL_RESULTS; start += RESULTS_PER_PAGE) {
-      console.log(`Fetching batch starting at ${start}...`);
+    let nextPageToken = null;
+    let totalFetched = 0;
+    let pageCount = 0;
+    
+    while (totalFetched < TOTAL_RESULTS) {
+      pageCount++;
+      console.log(`Fetching page ${pageCount}...`);
       
       try {
-        const response = await getJson({
+        const params = {
           engine: 'google_jobs',
           q: 'product designer design system remote',
-          api_key: process.env.SERPAPI_KEY,
-          start: start,
-          num: Math.min(RESULTS_PER_PAGE, TOTAL_RESULTS - start)
-        });
+          api_key: process.env.SERPAPI_KEY
+        };
+        
+        // Add next_page_token if we have one (for pagination)
+        if (nextPageToken) {
+          params.next_page_token = nextPageToken;
+        }
+        
+        const response = await getJson(params);
         
         if (response.jobs_results && response.jobs_results.length > 0) {
-          allJobs.push(...response.jobs_results);
-          console.log(`Fetched ${response.jobs_results.length} jobs`);
+          const jobsToAdd = response.jobs_results.slice(0, TOTAL_RESULTS - totalFetched);
+          allJobs.push(...jobsToAdd);
+          totalFetched += jobsToAdd.length;
+          console.log(`Fetched ${jobsToAdd.length} jobs (total: ${totalFetched})`);
         }
         
-        // Add delay between requests (except for the last one)
-        if (start + RESULTS_PER_PAGE < TOTAL_RESULTS) {
-          console.log(`Waiting ${DELAY_MS}ms before next request...`);
-          await delay(DELAY_MS);
+        // Check if there's a next page
+        if (response.serpapi_pagination && response.serpapi_pagination.next_page_token) {
+          nextPageToken = response.serpapi_pagination.next_page_token;
+          
+          // Add delay before next request if we're continuing
+          if (totalFetched < TOTAL_RESULTS) {
+            console.log(`Waiting ${DELAY_MS}ms before next request...`);
+            await delay(DELAY_MS);
+          }
+        } else {
+          // No more pages available
+          console.log('No more pages available');
+          break;
         }
+        
       } catch (error) {
-        console.error(`Error fetching batch at ${start}:`, error.message);
+        console.error(`Error fetching page ${pageCount}:`, error.message);
         console.error('Full error:', error);
-        // Continue with next batch even if one fails
+        // Break on error since we can't continue pagination
+        break;
       }
     }
     
