@@ -64,6 +64,7 @@ async function runJobScraper() {
         }
       } catch (error) {
         console.error(`Error fetching batch at ${start}:`, error.message);
+        console.error('Full error:', error);
         // Continue with next batch even if one fails
       }
     }
