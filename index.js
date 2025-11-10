@@ -75,6 +75,61 @@ app.get('/test-scraper', (req, res) => {
   }
 });
 
+// Scraper endpoints - load modules only when called
+app.post('/api/scrape', async (req, res) => {
+  try {
+    console.log('=== /api/scrape endpoint called ===');
+    console.log('Loading scraper module...');
+    const scraperModule = require('./scraper');
+    console.log('Scraper module loaded successfully');
+    console.log('Available exports:', Object.keys(scraperModule));
+    
+    if (!scraperModule.runJobScraper) {
+      throw new Error('runJobScraper function not found in scraper module!');
+    }
+    
+    console.log('Executing runJobScraper...');
+    const result = await scraperModule.runJobScraper();
+    console.log('Scraper completed successfully');
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error in /api/scrape:', error.message);
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+app.post('/api/scrape/general', async (req, res) => {
+  try {
+    console.log('=== /api/scrape/general endpoint called ===');
+    console.log('Loading scraper module...');
+    const scraperModule = require('./scraper');
+    console.log('Scraper module loaded successfully');
+    console.log('Available exports:', Object.keys(scraperModule));
+    
+    if (!scraperModule.runGeneralJobScraper) {
+      throw new Error('runGeneralJobScraper function not found in scraper module!');
+    }
+    
+    console.log('Executing runGeneralJobScraper...');
+    const result = await scraperModule.runGeneralJobScraper();
+    console.log('General scraper completed successfully');
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error in /api/scrape/general:', error.message);
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 console.log('Starting server...');
 app.listen(PORT, '0.0.0.0', () => {
   console.log('========================================');
