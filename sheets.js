@@ -40,27 +40,52 @@ async function getExistingJobs() {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'Sheet1!A2:G', // Skip header row, read all data columns
+      range: 'company_boards!A2:G', // Skip header row, read all data columns
     });
     
     const rows = response.data.values || [];
     
     return rows.map(row => ({
-      title: row[0] || '',
-      company: row[1] || '',
-      location: row[2] || '',
-      url: row[3] || '',
-      postedAt: row[4] || '',
-      scheduleType: row[5] || '',
-      scrapedAt: row[6] || ''
+      timestamp: row[0] || '',      // A: Timestamp
+      title: row[1] || '',           // B: Title
+      company: row[2] || '',         // C: Company
+      location: row[3] || '',        // D: Location
+      url: row[4] || '',             // E: Apply_URL
+      source: row[5] || '',          // F: Source
+      postedAt: row[6] || ''         // G: Posted
     }));
     
   } catch (error) {
     console.error('Error fetching existing jobs:', error.message);
     
-    // If sheet doesn't exist or is empty, return empty array
+    // If sheet doesn't exist or is empty, try to initialize it with headers
     if (error.message.includes('Unable to parse range')) {
-      console.log('Sheet appears to be empty, will create headers');
+      console.log('Sheet appears to be empty, initializing with headers...');
+      try {
+        const sheets = getGoogleSheetsClient();
+        const spreadsheetId = extractSpreadsheetId(process.env.SPREADSHEET_ID);
+        
+        // Add headers
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: 'company_boards!A1:G1',
+          valueInputOption: 'RAW',
+          resource: {
+            values: [[
+              'Timestamp',
+              'Title',
+              'Company',
+              'Location',
+              'Apply_URL',
+              'Source',
+              'Posted'
+            ]]
+          }
+        });
+        console.log('Headers added successfully');
+      } catch (initError) {
+        console.error('Error initializing headers:', initError.message);
+      }
       return [];
     }
     
@@ -79,7 +104,7 @@ async function appendNewJobs(jobs) {
     try {
       const checkResponse = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: 'Sheet1!A1:G1',
+        range: 'company_boards!A1:G1',
       });
       needsHeaders = !checkResponse.data.values || checkResponse.data.values.length === 0;
     } catch (error) {
@@ -91,17 +116,17 @@ async function appendNewJobs(jobs) {
       console.log('Adding headers to spreadsheet...');
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'Sheet1!A1:G1',
+        range: 'company_boards!A1:G1',
         valueInputOption: 'RAW',
         resource: {
           values: [[
+            'Timestamp',
             'Title',
             'Company',
             'Location',
-            'URL',
-            'Posted At',
-            'Schedule Type',
-            'Scraped At'
+            'Apply_URL',
+            'Source',
+            'Posted'
           ]]
         }
       });
@@ -109,19 +134,19 @@ async function appendNewJobs(jobs) {
     
     // Convert jobs to rows
     const rows = jobs.map(job => [
+      job.timestamp,
       job.title,
       job.company,
       job.location,
       job.url,
-      job.postedAt,
-      job.scheduleType,
-      job.scrapedAt
+      job.source,
+      job.postedAt
     ]);
     
     // Append rows
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'Sheet1!A2:G',
+      range: 'company_boards!A2:G',
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       resource: {
