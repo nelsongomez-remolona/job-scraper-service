@@ -112,8 +112,8 @@ async function runJobScraper() {
       title: job.title,
       company: job.company_name,
       location: job.location,
-      url: job.share_url || job.related_links?.[0]?.link || '',
-      source: 'Google Jobs (SerpAPI)',
+      url: job.apply_options?.[0]?.link || job.share_url || job.related_links?.[0]?.link || '',
+      source: job.via || 'Unknown',
       postedAt: job.detected_extensions?.posted_at || ''
     }));
     
