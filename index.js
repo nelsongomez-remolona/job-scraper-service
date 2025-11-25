@@ -33,6 +33,17 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// CORS Support - allows frontend to call this API
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Health check
 app.get('/health', (req, res) => {
   console.log('Health check called');
@@ -67,6 +78,109 @@ app.get('/test-scraper', (req, res) => {
     });
   } catch (error) {
     console.error('❌ Failed to load scraper module:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// ========================================
+// NEW: API Search Endpoint (for comparison tool)
+// ========================================
+app.post('/api/search', async (req, res) => {
+  try {
+    console.log('=== /api/search endpoint called ===');
+    console.log('Request body:', req.body);
+    
+    const { what, where, limit = 20 } = req.body;
+    
+    if (!what || !where) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: what, where'
+      });
+    }
+    
+    console.log(`Searching for: "${what}" in "${where}" (limit: ${limit})`);
+    
+    const { getJson } = require('serpapi');
+    
+    const query = `${what} (site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com OR site:linkedin.com/jobs)`;
+    
+    const params = {
+      engine: 'google',
+      q: query,
+      api_key: process.env.SERPAPI_KEY,
+      tbs: 'qdr:m',
+      num: Math.min(limit, 100),
+      hl: 'en',
+      gl: 'us',
+      device: 'desktop'
+    };
+    
+    console.log('Calling SerpAPI...');
+    const response = await getJson(params);
+    console.log(`Got ${response.organic_results?.length || 0} results from SerpAPI`);
+    
+    const jobs = (response.organic_results || []).map((job) => {
+      const link = job.link || '';
+      
+      let company = 'Unknown';
+      let source = 'Unknown';
+      
+      const greenhouseMatch = link.match(/boards\.greenhouse\.io\/([^\/]+)/);
+      if (greenhouseMatch) {
+        company = greenhouseMatch[1];
+        source = 'Greenhouse';
+      }
+      
+      const leverMatch = link.match(/jobs\.lever\.co\/([^\/]+)/);
+      if (leverMatch) {
+        company = leverMatch[1];
+        source = 'Lever';
+      }
+      
+      const ashbyMatch = link.match(/jobs\.ashbyhq\.com\/([^\/]+)/);
+      if (ashbyMatch) {
+        company = ashbyMatch[1];
+        source = 'Ashby';
+      }
+      
+      const linkedInMatch = link.match(/linkedin\.com\/jobs\/view/);
+      if (linkedInMatch) {
+        const titleMatch = job.title.match(/at (.+?)(?:\s*\||$)/i);
+        if (titleMatch) {
+          company = titleMatch[1].trim();
+        }
+        source = 'LinkedIn';
+      }
+      
+      return {
+        id: job.position || Math.random().toString(36).substr(2, 9),
+        title: job.title || 'Untitled',
+        company: company,
+        location: where,
+        description: job.snippet || '',
+        url: link,
+        source: source,
+        postedDate: job.date || null,
+      };
+    });
+    
+    console.log(`Processed ${jobs.length} jobs`);
+    
+    res.json({
+      success: true,
+      count: jobs.length,
+      total: response.search_information?.total_results || jobs.length,
+      jobs: jobs
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in /api/search:', error.message);
+    console.error('Stack trace:', error.stack);
     res.status(500).json({
       success: false,
       error: error.message,
@@ -138,6 +252,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /health');
   console.log('  GET  /test');
   console.log('  GET  /test-scraper');
+  console.log('  POST /api/search ✨ NEW - Comparison Tool');
   console.log('  POST /api/scrape');
   console.log('  POST /api/scrape/general');
   console.log('========================================');
