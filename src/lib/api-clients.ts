@@ -1,8 +1,10 @@
-  import { JobResult, APIResult } from '../App';
-  import { API_CONFIG } from '../config/api-config';
-  
-  const SERPAPI_COST_PER_SEARCH = 0.01;
-  const ADZUNA_COST_PER_SEARCH = 0.00;
+import { JobResult, APIResult } from '../App';
+
+const SERPAPI_COST_PER_SEARCH = 0.01;
+const ADZUNA_COST_PER_SEARCH = 0.00;
+
+// Railway API base URL - update this if your Railway app URL changes
+const RAILWAY_API_URL = 'https://job-scraper-service-production-d38e.up.railway.app';
   
   interface SearchParams {
     what: string;
@@ -10,203 +12,166 @@
     resultsPerPage?: number;
   }
   
-  /**
-   * Search using your Railway job scraper service (NEW /api/search endpoint)
-   * This endpoint accepts search parameters and returns jobs without saving to Sheets
-   * Perfect for the comparison tool!
-   */
-  export async function searchSerpAPI(params: SearchParams): Promise<APIResult> {
-    const { what, where, resultsPerPage = 20 } = params;
-    const startTime = Date.now();
-  
-    try {
-      // Use the NEW /api/search endpoint
-      const RAILWAY_API_URL = 'https://job-scraper-service-production-d38e.up.railway.app/api/search';
-  
-      const requestBody = {
-        what,
-        where,
-        limit: resultsPerPage,
-      };
-  
-      console.log('Calling Railway /api/search with:', requestBody);
-  
-      const response = await fetch(RAILWAY_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-  
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Railway API HTTP ${response.status}: ${errorText}`);
-      }
-  
-      const data = await response.json();
-      const responseTime = Date.now() - startTime;
-  
-      console.log('Railway API response:', data);
-  
-      if (!data.success) {
-        throw new Error(data.error || 'Search failed');
-      }
-  
-      // Parse the job results
-      const jobs: JobResult[] = (data.jobs || []).map((job: any) => ({
-        id: job.id || `railway-${Math.random().toString(36).substr(2, 9)}`,
-        title: job.title || 'Untitled',
-        company: job.company || 'Unknown Company',
-        location: job.location || where,
-        salary: undefined, // SerpAPI doesn't provide structured salary data
-        description: job.description || job.snippet || '',
-        url: job.url || '#',
-        source: job.source || 'Google Jobs',
-        postedDate: job.postedDate || undefined,
-      }));
-  
-      return {
-        provider: 'serpapi',
-        jobs,
-        responseTime,
-        totalResults: data.total || data.count || jobs.length,
-        cost: SERPAPI_COST_PER_SEARCH,
-      };
-    } catch (error) {
-      console.error('Railway API error:', error);
-      
-      // Check if it's a 404 (endpoint doesn't exist yet)
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes('404')) {
-        return {
-          provider: 'serpapi',
-          jobs: [],
-          responseTime: Date.now() - startTime,
-          totalResults: 0,
-          cost: SERPAPI_COST_PER_SEARCH,
-          error: '❌ The /api/search endpoint is not deployed yet. See NEW-RAILWAY-ENDPOINT.js to add it to your Railway service.',
-        };
-      }
-      
+/**
+ * Search using SerpAPI via your Railway backend
+ * This keeps your API keys secure on the server
+ */
+export async function searchSerpAPI(params: SearchParams): Promise<APIResult> {
+  const { what, where, resultsPerPage = 20 } = params;
+  const startTime = Date.now();
+
+  try {
+    const requestBody = {
+      what,
+      where,
+      limit: resultsPerPage,
+    };
+
+    console.log('Calling Railway /api/search with:', requestBody);
+
+    const response = await fetch(`${RAILWAY_API_URL}/api/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Railway API HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const responseTime = Date.now() - startTime;
+
+    if (!data.success) {
+      throw new Error(data.error || 'Search failed');
+    }
+
+    const jobs: JobResult[] = (data.jobs || []).map((job: any) => ({
+      id: job.id || `railway-${Math.random().toString(36).substr(2, 9)}`,
+      title: job.title || 'Untitled',
+      company: job.company || 'Unknown Company',
+      location: job.location || where,
+      salary: job.salary || undefined,
+      description: job.description || job.snippet || '',
+      url: job.url || '#',
+      source: job.source || 'Google Jobs',
+      postedDate: job.postedDate || undefined,
+    }));
+
+    return {
+      provider: 'serpapi',
+      jobs,
+      responseTime,
+      totalResults: data.total || data.count || jobs.length,
+      cost: SERPAPI_COST_PER_SEARCH,
+    };
+  } catch (error) {
+    console.error('SerpAPI error:', error);
+
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('404')) {
       return {
         provider: 'serpapi',
         jobs: [],
         responseTime: Date.now() - startTime,
         totalResults: 0,
         cost: SERPAPI_COST_PER_SEARCH,
-        error: errorMessage,
+        error: '❌ /api/search endpoint not found. Deploy it to Railway first!',
       };
     }
+
+    return {
+      provider: 'serpapi',
+      jobs: [],
+      responseTime: Date.now() - startTime,
+      totalResults: 0,
+      cost: SERPAPI_COST_PER_SEARCH,
+      error: errorMessage,
+    };
   }
+}
   
-  /**
-   * Search using Adzuna API
-   */
-  export async function searchAdzuna(params: SearchParams): Promise<APIResult> {
-    const { what, where, resultsPerPage = 20 } = params;
-    const startTime = Date.now();
-  
-    try {
-      // Get Adzuna credentials from config
-      const appId = API_CONFIG.adzuna.appId;
-      const appKey = API_CONFIG.adzuna.appKey;
-  
-      if (!appId || !appKey || !API_CONFIG.adzuna.enabled) {
-        return {
-          provider: 'adzuna',
-          jobs: [],
-          responseTime: Date.now() - startTime,
-          totalResults: 0,
-          cost: ADZUNA_COST_PER_SEARCH,
-          error: 'Adzuna not configured. Edit /config/api-config.ts to add your App ID and set enabled: true',
-        };
-      }
-  
-      // Build Adzuna request
-      const searchParams = new URLSearchParams({
-        app_id: appId,
-        app_key: appKey,
-        results_per_page: resultsPerPage.toString(),
-        what: what,
-        where: where,
-      });
-  
-      // Adzuna uses country-specific endpoints (us, gb, au, etc.)
-      const country = 'us';
-      const url = `https://api.adzuna.com/v1/api/jobs/${country}/search/1?${searchParams}`;
-  
-      const response = await fetch(url);
-  
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Adzuna HTTP ${response.status}: ${errorText}`);
-      }
-  
-      const data = await response.json();
-      const responseTime = Date.now() - startTime;
-  
-      // Parse Adzuna results
-      const jobs: JobResult[] = (data.results || []).map((job: any) => {
-        // Format salary
-        let salary: string | undefined;
-        if (job.salary_min && job.salary_max) {
-          salary = `$${Math.round(job.salary_min).toLocaleString()} - $${Math.round(job.salary_max).toLocaleString()}`;
-        } else if (job.salary_min) {
-          salary = `From $${Math.round(job.salary_min).toLocaleString()}`;
-        } else if (job.salary_max) {
-          salary = `Up to $${Math.round(job.salary_max).toLocaleString()}`;
-        }
-  
-        // Format posted date
-        let postedDate: string | undefined;
-        if (job.created) {
-          const date = new Date(job.created);
-          const now = new Date();
-          const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-  
-          if (diffDays === 0) {
-            postedDate = 'Today';
-          } else if (diffDays === 1) {
-            postedDate = 'Yesterday';
-          } else if (diffDays < 7) {
-            postedDate = `${diffDays} days ago`;
-          } else if (diffDays < 30) {
-            postedDate = `${Math.floor(diffDays / 7)} weeks ago`;
-          } else {
-            postedDate = date.toLocaleDateString();
-          }
-        }
-  
-        return {
-          id: `adzuna-${job.id}`,
-          title: job.title || 'Untitled',
-          company: job.company?.display_name || 'Unknown Company',
-          location: job.location?.display_name || where,
-          salary,
-          description: job.description || '',
-          url: job.redirect_url || '#',
-          source: 'Adzuna',
-          postedDate,
-        };
-      });
-  
-      return {
-        provider: 'adzuna',
-        jobs,
-        responseTime,
-        totalResults: data.count || 0,
-        cost: ADZUNA_COST_PER_SEARCH,
-      };
-    } catch (error) {
-      console.error('Adzuna error:', error);
+/**
+ * Search using Adzuna API via your Railway backend
+ * This keeps your API keys secure on the server
+ */
+export async function searchAdzuna(params: SearchParams): Promise<APIResult> {
+  const { what, where, resultsPerPage = 20 } = params;
+  const startTime = Date.now();
+
+  try {
+    const requestBody = {
+      what,
+      where,
+      limit: resultsPerPage,
+    };
+
+    console.log('Calling Railway /api/search/adzuna with:', requestBody);
+
+    const response = await fetch(`${RAILWAY_API_URL}/api/search/adzuna`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Railway API HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const responseTime = Date.now() - startTime;
+
+    if (!data.success) {
+      throw new Error(data.error || 'Search failed');
+    }
+
+    const jobs: JobResult[] = (data.jobs || []).map((job: any) => ({
+      id: job.id || `adzuna-${Math.random().toString(36).substr(2, 9)}`,
+      title: job.title || 'Untitled',
+      company: job.company || 'Unknown Company',
+      location: job.location || where,
+      salary: job.salary || undefined,
+      description: job.description || '',
+      url: job.url || '#',
+      source: job.source || 'Adzuna',
+      postedDate: job.postedDate || undefined,
+    }));
+
+    return {
+      provider: 'adzuna',
+      jobs,
+      responseTime,
+      totalResults: data.total || data.count || jobs.length,
+      cost: ADZUNA_COST_PER_SEARCH,
+    };
+  } catch (error) {
+    console.error('Adzuna error:', error);
+
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('not configured')) {
       return {
         provider: 'adzuna',
         jobs: [],
         responseTime: Date.now() - startTime,
         totalResults: 0,
         cost: ADZUNA_COST_PER_SEARCH,
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        error: '❌ Adzuna not configured. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to Railway environment variables.',
       };
     }
+
+    return {
+      provider: 'adzuna',
+      jobs: [],
+      responseTime: Date.now() - startTime,
+      totalResults: 0,
+      cost: ADZUNA_COST_PER_SEARCH,
+      error: errorMessage,
+    };
   }
+}

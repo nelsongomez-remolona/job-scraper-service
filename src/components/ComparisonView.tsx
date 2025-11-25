@@ -3,7 +3,6 @@ import { Badge } from './ui/badge';
 import { APIResult } from '../App';
 import { Clock, DollarSign, FileText, TrendingUp, CheckCircle2, XCircle, AlertCircle, Settings } from 'lucide-react';
 import { JobCard } from './JobCard';
-import { API_CONFIG } from '../config/api-config';
 
 interface ComparisonViewProps {
   serpResults: APIResult | null;
@@ -30,14 +29,9 @@ export function ComparisonView({ serpResults, adzunaResults, loading }: Comparis
     );
   }
 
-  // Check if APIs are configured
-  const serpConfigured = API_CONFIG.serpapi.enabled && API_CONFIG.serpapi.apiKey;
-  const adzunaConfigured = API_CONFIG.adzuna.enabled && API_CONFIG.adzuna.appId && API_CONFIG.adzuna.appKey;
-
-  // Show configuration warning if needed
-  const showConfigWarning = (!serpConfigured || !adzunaConfigured) && 
-                           (serpResults?.error?.includes('not configured') || 
-                            adzunaResults?.error?.includes('not configured'));
+  // Show configuration warning if APIs report configuration errors
+  const showConfigWarning = serpResults?.error?.includes('not configured') ||
+                           adzunaResults?.error?.includes('not configured');
 
   return (
     <div className="space-y-6">
@@ -49,25 +43,25 @@ export function ComparisonView({ serpResults, adzunaResults, loading }: Comparis
             <div className="space-y-2">
               <h3 className="text-amber-900">Configuration Required</h3>
               <p className="text-amber-800 text-sm">
-                To use the comparison tool, you need to configure your API credentials in <code className="px-1.5 py-0.5 bg-amber-100 rounded text-xs">/config/api-config.ts</code>
+                API credentials need to be configured in your Railway environment variables.
               </p>
               <div className="space-y-2 text-sm">
-                {!adzunaConfigured && (
+                {adzunaResults?.error?.includes('not configured') && (
                   <div className="flex items-start gap-2">
                     <span className="text-amber-700">•</span>
                     <span className="text-amber-700">
-                      <strong>Adzuna:</strong> Add your App ID (you already have the App Key). Get it from{' '}
+                      <strong>Adzuna:</strong> Add <code className="px-1 py-0.5 bg-amber-100 rounded text-xs">ADZUNA_APP_ID</code> and <code className="px-1 py-0.5 bg-amber-100 rounded text-xs">ADZUNA_APP_KEY</code> to Railway. Get credentials from{' '}
                       <a href="https://developer.adzuna.com/" target="_blank" rel="noopener noreferrer" className="underline">
                         developer.adzuna.com
                       </a>
                     </span>
                   </div>
                 )}
-                {!serpConfigured && (
+                {serpResults?.error?.includes('not configured') && (
                   <div className="flex items-start gap-2">
                     <span className="text-amber-700">•</span>
                     <span className="text-amber-700">
-                      <strong>SerpAPI (optional):</strong> Add your API key and set enabled: true. Get it from{' '}
+                      <strong>SerpAPI:</strong> Add <code className="px-1 py-0.5 bg-amber-100 rounded text-xs">SERPAPI_KEY</code> to Railway. Get it from{' '}
                       <a href="https://serpapi.com/users/sign_up" target="_blank" rel="noopener noreferrer" className="underline">
                         serpapi.com
                       </a>

@@ -189,6 +189,117 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
+// ========================================
+// NEW: Adzuna Search Endpoint (for comparison tool)
+// ========================================
+app.post('/api/search/adzuna', async (req, res) => {
+  try {
+    console.log('=== /api/search/adzuna endpoint called ===');
+    console.log('Request body:', req.body);
+
+    const { what, where, limit = 20 } = req.body;
+
+    if (!what || !where) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: what, where'
+      });
+    }
+
+    // Check if Adzuna credentials are configured
+    if (!process.env.ADZUNA_APP_ID || !process.env.ADZUNA_APP_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'Adzuna API credentials not configured. Set ADZUNA_APP_ID and ADZUNA_APP_KEY environment variables.'
+      });
+    }
+
+    console.log(`Searching Adzuna for: "${what}" in "${where}" (limit: ${limit})`);
+
+    const searchParams = new URLSearchParams({
+      app_id: process.env.ADZUNA_APP_ID,
+      app_key: process.env.ADZUNA_APP_KEY,
+      results_per_page: Math.min(limit, 50).toString(),
+      what: what,
+      where: where,
+    });
+
+    const country = 'us';
+    const url = `https://api.adzuna.com/v1/api/jobs/${country}/search/1?${searchParams}`;
+
+    console.log('Calling Adzuna API...');
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Adzuna HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log(`Got ${data.results?.length || 0} results from Adzuna`);
+
+    const jobs = (data.results || []).map((job) => {
+      let salary;
+      if (job.salary_min && job.salary_max) {
+        salary = `$${Math.round(job.salary_min).toLocaleString()} - $${Math.round(job.salary_max).toLocaleString()}`;
+      } else if (job.salary_min) {
+        salary = `From $${Math.round(job.salary_min).toLocaleString()}`;
+      } else if (job.salary_max) {
+        salary = `Up to $${Math.round(job.salary_max).toLocaleString()}`;
+      }
+
+      let postedDate;
+      if (job.created) {
+        const date = new Date(job.created);
+        const now = new Date();
+        const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+          postedDate = 'Today';
+        } else if (diffDays === 1) {
+          postedDate = 'Yesterday';
+        } else if (diffDays < 7) {
+          postedDate = `${diffDays} days ago`;
+        } else if (diffDays < 30) {
+          postedDate = `${Math.floor(diffDays / 7)} weeks ago`;
+        } else {
+          postedDate = date.toLocaleDateString();
+        }
+      }
+
+      return {
+        id: `adzuna-${job.id}`,
+        title: job.title || 'Untitled',
+        company: job.company?.display_name || 'Unknown Company',
+        location: job.location?.display_name || where,
+        salary: salary,
+        description: job.description || '',
+        url: job.redirect_url || '#',
+        source: 'Adzuna',
+        postedDate: postedDate,
+      };
+    });
+
+    console.log(`Processed ${jobs.length} jobs`);
+
+    res.json({
+      success: true,
+      count: jobs.length,
+      total: data.count || 0,
+      jobs: jobs
+    });
+
+  } catch (error) {
+    console.error('❌ Error in /api/search/adzuna:', error.message);
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Scraper endpoints - load modules only when called
 app.post('/api/scrape', async (req, res) => {
   try {
@@ -252,7 +363,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /health');
   console.log('  GET  /test');
   console.log('  GET  /test-scraper');
-  console.log('  POST /api/search ✨ NEW - Comparison Tool');
+  console.log('  POST /api/search - SerpAPI Search (Comparison Tool)');
+  console.log('  POST /api/search/adzuna - Adzuna Search (Comparison Tool)');
   console.log('  POST /api/scrape');
   console.log('  POST /api/scrape/general');
   console.log('========================================');
